@@ -188,6 +188,17 @@ class TestSnapshot:
                 assert "train_speed_gbps" in link
                 assert "target_speed_gbps" in link
 
+    def test_topology_fields(self, snapshot, backend):
+        """UMD snapshots carry a topology object with one entry per device."""
+        if not backend.use_umd:
+            assert "topology" not in snapshot
+            return
+        chips = snapshot["topology"]["chips"]
+        assert sorted(c["chip"] for c in chips) == sorted(backend.devices)
+        for c in chips:
+            assert "links" in c
+            assert ("down_channels" in c and "off_host" in c) or "note" in c
+
     def test_snapshot_no_tty(self):
         """Test if the output from tt-smi -s --snapshot_no_tty can be parsed as json"""
         result = subprocess.run(

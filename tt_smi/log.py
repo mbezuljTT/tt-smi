@@ -290,6 +290,28 @@ class EthLink(ElasticModel):
 
 
 @optional
+class TopologyLink(ElasticModel):
+    channel: int
+    peer_chip: int
+    peer_channel: int
+
+
+@optional
+class TopologyChip(ElasticModel):
+    chip: int
+    links: List[TopologyLink]
+    down_channels: List[int]
+    off_host: int
+    note: str
+
+
+@optional
+class Topology(ElasticModel):
+    chips: List[TopologyChip]
+    warnings: List[str]
+
+
+@optional
 class TTSMIDeviceLog(ElasticModel):
     smbus_telem: SmbusTelem
     board_info: BoardInfo
@@ -315,6 +337,7 @@ class TTSMILog(ElasticModel):
     host_sw_vers: HostSWVersions
     device_info: List[TTSMIDeviceLog]
     processes: List[DeviceProcess]
+    topology: Topology
 
     def get_clean_json_string(self):
         """Returns a cleaned json string"""

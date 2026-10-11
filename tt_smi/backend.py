@@ -180,6 +180,7 @@ class TTSMIBackend:
 
     def get_logs_json(self) -> str:
         """Get logs as JSON"""
+        eth_status: Dict[int, Optional[List[Dict]]] = {}
         for i in self.devices:
             self.log.device_info[i].smbus_telem = self.smbus_telem_info[i]
             self.log.device_info[i].board_info = self.device_infos[i]
@@ -194,15 +195,47 @@ class TTSMIBackend:
             self.log.device_info[i].firmwares = self.firmware_infos[i]
             self.log.device_info[i].limits = self.chip_limits[i]
             try:
-                self.log.device_info[i].ethernet = self.get_ethernet_status(i)
+                eth_links = self.get_ethernet_status(i)
             except Exception as e:
-                self.log.device_info[i].ethernet = None
+                eth_links = None
                 print(
                     CMD_LINE_COLOR.YELLOW,
                     f"WARNING: device {i}: ethernet status read failed, omitted from snapshot: {e}",
                     CMD_LINE_COLOR.ENDC,
                     file=sys.stderr,
                 )
+            self.log.device_info[i].ethernet = eth_links
+            eth_status[i] = eth_links
+
+        try:
+            topo = self.get_topology(eth_status=eth_status)
+        except Exception as e:
+            topo = None
+            print(
+                CMD_LINE_COLOR.YELLOW,
+                f"WARNING: ethernet topology read failed, omitted from snapshot: {e}",
+                CMD_LINE_COLOR.ENDC,
+                file=sys.stderr,
+            )
+        if topo is not None:
+            chips = []
+            for i in topo["chips"]:
+                links = [
+                    log.TopologyLink(channel=ch, peer_chip=peer, peer_channel=pch)
+                    for ch, (peer, pch) in sorted(topo["connections"].get(i, {}).items())
+                ]
+                summary = topo["ports"][i]
+                if summary is None:
+                    chips.append(log.TopologyChip(chip=i, links=links, note=topo["reasons"].get(i, "not supported")))
+                else:
+                    chips.append(
+                        log.TopologyChip(
+                            chip=i, links=links, down_channels=summary["down"], off_host=len(summary["off_host"])
+                        )
+                    )
+            # Fields are validated, so leave warnings out instead of passing None
+            extra = {"warnings": topo["warnings"]} if topo["warnings"] else {}
+            self.log.topology = log.Topology(chips=chips, **extra)
 
         self.update_processes()
         self.log.processes = [log.DeviceProcess(**p) for p in self.device_processes]
@@ -579,7 +612,7 @@ class TTSMIBackend:
                 line += f" target {target if target is not None else '-':>4} Gbps"
                 print(line)
 
-    def get_topology(self) -> Optional[Dict]:
+    def get_topology(self, eth_status: Optional[Dict[int, Optional[List[Dict]]]] = None) -> Optional[Dict]:
         """Chip-to-chip eth topology. Links from the discovery-time ClusterDescriptor;
         DOWN from per-port status (local BH, new tt-umd). None with --use_luwen."""
         if not self.use_umd:
@@ -590,7 +623,7 @@ class TTSMIBackend:
         reasons: Dict[int, str] = {}
         for i in chips:
             try:
-                links = self.get_ethernet_status(i)
+                links = eth_status[i] if eth_status is not None else self.get_ethernet_status(i)
             except Exception as e:
                 links = None
                 reasons[i] = f"eth status read failed: {e}"

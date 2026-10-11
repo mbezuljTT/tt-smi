@@ -240,6 +240,46 @@ Per-link Ethernet status for local Blackhole chips (UMD only). Read on first ope
 | Speed (Gbps) | Trained link speed. `-` when not available. |
 | Target (Gbps) | Configured target speed. `-` when not available. |
 
+### Ethernet topology matrix (`--topo_matrix`)
+
+`tt-smi --topo_matrix` prints an N x N matrix of tt-smi device ids, modeled on `nvidia-smi topo --matrix`.
+
+| Token / column | Meaning |
+|---|---|
+| `X` | Self |
+| `ETH<n>` | n trained Ethernet links between the two chips (from tt-umd topology discovery at startup) |
+| `-` | No direct Ethernet link |
+| `DOWN` | Ports that failed link training (shown DOWN by `--eth_status`). The far end is unknown, so they are listed below the matrix as `chip N: ch X DOWN`. UNUSED ports are not counted. |
+| `Off-host` | UP ports whose peer is not a chip in this session, usually a cable to another host. Also counts links to chips hidden by `TT_VISIBLE_DEVICES` or unhealthy, ports skipped by discovery, and ports trained after discovery. tt-smi warns when it detects the first two. |
+| `N/A` | Not available for this chip; the reason is printed below the legend |
+
+The matrix works with any tt-umd. DOWN and Off-host need local Blackhole chips and a tt-umd with the TTDevice eth getters (same requirement as `--eth_status`). Channels are logical Ethernet channels, the same numbering as `--eth_status`.
+
+`-s` / `-f` snapshots include a top-level `topology` object: per chip, the `links` list (`channel`, `peer_chip`, `peer_channel`), `down_channels` and the `off_host` count, or a `note` with the reason they are unavailable.
+
+Example (4x p150, chip 0 ch 9 DOWN, chip 3 cabled to another host):
+
+```
+Ethernet topology (4 chips)
+      C0     C1     C2     C3     DOWN   Off-host
+C0    X      ETH2   ETH2   -      1      0
+C1    ETH2   X      -      ETH2   0      0
+C2    ETH2   -      X      ETH2   0      0
+C3    -      ETH2   ETH2   X      0      1
+
+Legend:
+  X        = Self
+  ETH<n>   = Connected by <n> trained Ethernet link(s)
+  -        = No direct Ethernet link
+  DOWN     = Ports that failed link training (far end unknown; listed below)
+  Off-host = UP ports whose peer is not a chip in this session: usually a cable to
+             another host; also links to chips hidden by TT_VISIBLE_DEVICES or
+             unhealthy, ports skipped by discovery, or ports trained after discovery
+  N/A      = Not available for this chip (reason below)
+DOWN ports:
+  chip 0: ch 9 DOWN
+```
+
 ### Tested Versions
 
 The sidebar box lists the version of each component in the Tenstorrent software

@@ -333,3 +333,54 @@ class TestTopoMatrixArgs:
         assert e.value.code == 2
         with pytest.raises(SystemExit):
             self.run(monkeypatch, other + ["--topo_matrix"])
+
+
+class TestSnapshotTopology:
+    def snapshot(self, backend):
+        n = len(backend.devices)
+        backend.smbus_telem_info = [{}] * n
+        backend.device_infos = [{"board_type": "p150b"} for _ in range(n)]
+        backend.device_telemetrys = [{}] * n
+        backend.device_gddr_telemetrys = [{}] * n
+        backend.firmware_infos = [{}] * n
+        backend.chip_limits = [{}] * n
+        with patch.object(TTSMIBackend, "update_processes"):
+            return json.loads(backend.get_logs_json())
+
+    def test_topology_field(self, monkeypatch):
+        monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
+        snap = self.snapshot(qb_backend(eth=qb_eth_off_host()))
+        chips = {c["chip"]: c for c in snap["topology"]["chips"]}
+        assert chips[0]["down_channels"] == [9]
+        assert chips[0]["off_host"] == 0
+        assert chips[3]["off_host"] == 1
+        assert {"channel": 4, "peer_chip": 1, "peer_channel": 4} in chips[0]["links"]
+        assert len(chips[0]["links"]) == 4
+        assert "warnings" not in snap["topology"]
+
+    def test_eth_status_read_once(self):
+        backend = qb_backend()
+        calls = []
+        orig = backend.get_ethernet_status
+        backend.get_ethernet_status = lambda i: calls.append(i) or orig(i)
+        self.snapshot(backend)
+        assert sorted(calls) == [0, 1, 2, 3]
+
+    def test_unsupported_chip_note(self):
+        backend = make_topo_backend(
+            {0: make_dev(ARCH.WORMHOLE_B0)}, {}, eth={0: None}, reasons={0: "not supported on Wormhole"}
+        )
+        assert self.snapshot(backend)["topology"]["chips"][0] == {
+            "chip": 0, "links": [], "note": "not supported on Wormhole"
+        }
+
+    def test_topology_failure_omitted(self, capsys):
+        backend = qb_backend()
+        backend.umd_cluster_descriptor.get_ethernet_connections.side_effect = RuntimeError("boom")
+        snap = self.snapshot(backend)
+        assert "topology" not in snap
+        assert "ethernet topology read failed" in capsys.readouterr().err
+
+    def test_luwen_omitted(self):
+        backend = make_topo_backend({0: make_dev()}, {}, use_umd=False)
+        assert "topology" not in self.snapshot(backend)
