@@ -144,3 +144,106 @@ def classify_pcie_path(path_a: List[str], path_b: List[str], numa_a: str, numa_b
     depth_a = len(path_a) - 1 - common
     depth_b = len(path_b) - 1 - common
     return "PIX" if depth_a <= 1 and depth_b <= 1 else "PXB"
+
+
+Grid = Dict[Tuple[int, int], int]
+
+
+def _grids(rows: int, cols: int, adj: Dict[int, set], max_missing: int, budget: int) -> List[Grid]:
+    """All row-major placements where each chip links to its placed left/up neighbours,
+    except up to max_missing absent links where a chip has two placed neighbours."""
+    cells = [(r, c) for r in range(rows) for c in range(cols)]
+    grid: Grid = {}
+    found: List[Grid] = []
+    steps = [budget]
+
+    def place(i: int, missing: int):
+        if i == len(cells):
+            found.append(dict(grid))
+            return
+        steps[0] -= 1
+        if steps[0] < 0:
+            return
+        r, c = cells[i]
+        placed = [grid[p] for p in ((r - 1, c), (r, c - 1)) if p in grid]
+        cands = set().union(*(adj[p] for p in placed)) if placed else set(adj)
+        for chip in sorted(cands - set(grid.values())):
+            miss = sum(chip not in adj[p] for p in placed)
+            if missing + miss <= max_missing:
+                grid[(r, c)] = chip
+                place(i + 1, missing + miss)
+                del grid[(r, c)]
+
+    place(0, 0)
+    return found
+
+
+def _unexplained(grid: Grid, counts: Dict[Tuple[int, int], int]) -> int:
+    """Missing grid links + missing wraps on axes with any wrap + links outside the grid"""
+    mesh, wrap_x, wrap_y = grid_edges(grid)
+    links = {k for k, n in counts.items() if n and k[0] != k[1]}
+    missing = sum(e not in links for e in mesh)
+    missing += sum(e not in links for wraps in (wrap_x, wrap_y) if wraps & links for e in wraps)
+    return missing + len(links - mesh - wrap_x - wrap_y)
+
+
+def infer_grid(chips: List[int], counts: Dict[Tuple[int, int], int], max_missing: int = 2) -> Optional[Grid]:
+    """Place chips on the most square rows x cols grid (rows >= cols) whose neighbour links exist,
+    tolerating up to max_missing absent links. Among fits, the one that explains the most links.
+    {(row, col): chip}, or None if no grid fits."""
+    adj: Dict[int, set] = {c: set() for c in chips}
+    for a, b in counts:
+        if a != b and a in adj and b in adj:
+            adj[a].add(b)
+            adj[b].add(a)
+    n = len(chips)
+    shapes = sorted(((r, n // r) for r in range(1, n + 1) if n % r == 0 and r >= n // r), key=lambda s: s[0] - s[1])
+    for rows, cols in shapes:
+        for missing in range(max_missing + 1):
+            grids = _grids(rows, cols, adj, missing, budget=200000)
+            if grids:
+                return min(grids, key=lambda g: _unexplained(g, counts))
+    return None
+
+
+def grid_shape(grid: Grid) -> Tuple[int, int]:
+    return max(r for r, _ in grid) + 1, max(c for _, c in grid) + 1
+
+
+def _pair(a: int, b: int) -> Tuple[int, int]:
+    return (min(a, b), max(a, b))
+
+
+def grid_edges(grid: Grid) -> Tuple[set, set, set]:
+    """(neighbour, X wrap, Y wrap) chip pairs. No wraps on an axis of <= 2 chips."""
+    rows, cols = grid_shape(grid)
+    mesh = {_pair(grid[(r, c)], grid[(r + dr, c + dc)])
+            for (r, c) in grid for dr, dc in ((1, 0), (0, 1)) if (r + dr, c + dc) in grid}
+    wrap_x = {_pair(grid[(r, 0)], grid[(r, cols - 1)]) for r in range(rows)} if cols > 2 else set()
+    wrap_y = {_pair(grid[(0, c)], grid[(rows - 1, c)]) for c in range(cols)} if rows > 2 else set()
+    return mesh, wrap_x, wrap_y
+
+
+def wrap_links(grid: Grid, counts: Dict[Tuple[int, int], int], axis: str) -> List[int]:
+    """Per row (X) or column (Y): links between its two end chips. Empty if the axis has <= 2 chips."""
+    rows, cols = grid_shape(grid)
+    if axis == "X":
+        return [counts.get(_pair(grid[(r, 0)], grid[(r, cols - 1)]), 0) for r in range(rows)] if cols > 2 else []
+    return [counts.get(_pair(grid[(0, c)], grid[(rows - 1, c)]), 0) for c in range(cols)] if rows > 2 else []
+
+
+def format_axes(grid: Grid, counts: Dict[Tuple[int, int], int]) -> List[str]:
+    rows, cols = grid_shape(grid)
+    lines = [
+        f"Grid: {rows} rows (Y) x {cols} columns (X), inferred from Ethernet links; orientation is arbitrary",
+        "RING / LINE: the dim_types to use in a tt-metal mesh graph descriptor",
+    ]
+    for axis, size, line_name in (("X", cols, "rows"), ("Y", rows, "columns")):
+        wraps = wrap_links(grid, counts, axis)
+        if not wraps:
+            lines.append(f"{axis}: {size} chip{'s' if size != 1 else ''}, too short to tell mesh from torus")
+            continue
+        n = sum(1 for w in wraps if w)
+        kind = "torus / RING" if n == len(wraps) else "mesh / LINE" if n == 0 else "partial torus"
+        lines.append(f"{axis}: {kind}, wrap links on {n} of {len(wraps)} {line_name}")
+    return lines

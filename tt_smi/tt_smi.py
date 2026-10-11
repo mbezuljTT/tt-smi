@@ -170,6 +170,13 @@ def parse_args():
         help="Print chip-to-chip Ethernet connection matrix (like nvidia-smi topo --matrix).",
         dest="topo_matrix",
     )
+    parser.add_argument(
+        "--topo_grid",
+        default=False,
+        action="store_true",
+        help="Print the chip grid inferred from Ethernet links and whether X and Y are a mesh or a torus.",
+        dest="topo_grid",
+    )
     args = parser.parse_args()
     if args.eth_status is not None and (
         args.snapshot
@@ -196,6 +203,21 @@ def parse_args():
         parser.error(
             "--topo_matrix cannot be used with -s, -f, -r, -ls, -glx_reset, -glx_reset_auto, "
             "-glx_list_tray_to_device or --eth_status"
+        )
+    if args.topo_grid and (
+        args.snapshot
+        or args.filename is not False
+        or args.reset is not None
+        or args.list
+        or args.glx_reset
+        or args.glx_reset_auto
+        or args.glx_list_tray_to_device
+        or args.eth_status is not None
+        or args.topo_matrix
+    ):
+        parser.error(
+            "--topo_grid cannot be used with -s, -f, -r, -ls, -glx_reset, -glx_reset_auto, "
+            "-glx_list_tray_to_device, --eth_status or --topo_matrix"
         )
     return args
 
@@ -239,6 +261,9 @@ def tt_smi_main(backend: TTSMIBackend, args):
                 pcie_cells=pcie_cells,
                 legend_extra=topology.PCIE_LEGEND_LINES if pcie_cells else None,
             )
+        sys.exit(0)
+    if args.topo_grid:
+        backend.print_topology_grid()
         sys.exit(0)
     if args.snapshot or args.filename == "-":  # If we pass '-s' or '-f -"
         backend.print_logs_to_stdout(pretty=backend.pretty_output)
