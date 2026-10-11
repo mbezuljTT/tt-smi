@@ -32,15 +32,32 @@ def make_dev(arch=ARCH.BLACKHOLE, remote=False):
     return dev
 
 
-def make_topo_backend(devices, connections, use_umd=True):
+def port(channel, link):
+    return {"channel": channel, "core": "0-0", "link": link, "train_speed_gbps": None, "target_speed_gbps": None}
+
+
+def make_topo_backend(devices, connections, eth=None, reasons=None, use_umd=True):
+    """eth: {chip: list of port dicts, None, or an Exception to raise}. reasons: {chip: str}."""
     desc = MagicMock()
     desc.get_ethernet_connections.return_value = connections
     with patch("tt_smi.backend.get_host_info", return_value=HOST_INFO), patch(
         "tt_smi.backend.get_host_software_versions", return_value=HOST_SW_VERS
     ):
-        return TTSMIBackend(
+        backend = TTSMIBackend(
             devices=devices, umd_cluster_descriptor=desc if use_umd else None, fully_init=False, pretty_output=False
         )
+    eth = eth or {}
+    reasons = reasons or {}
+
+    def fake_status(i):
+        value = eth.get(i)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    backend.get_ethernet_status = fake_status
+    backend.get_ethernet_not_supported_reason = lambda i: reasons.get(i, "not supported")
+    return backend
 
 
 QB_CONN = bidir(
@@ -49,8 +66,18 @@ QB_CONN = bidir(
 )
 
 
-def qb_backend():
-    return make_topo_backend({i: make_dev() for i in range(4)}, QB_CONN)
+def qb_ports(chip, extra=()):
+    return [port(c, "UP") for c in sorted(QB_CONN[chip])] + [port(c, s) for c, s in extra]
+
+
+def qb_backend(**kw):
+    eth = kw.pop("eth", None) or {
+        0: qb_ports(0, [(9, "DOWN"), (0, "UNUSED")]),
+        1: qb_ports(1),
+        2: qb_ports(2),
+        3: qb_ports(3),
+    }
+    return make_topo_backend({i: make_dev() for i in range(4)}, QB_CONN, eth=eth, **kw)
 
 
 class TestCountLinks:
@@ -130,6 +157,97 @@ class TestPrintTopology:
         for dev in devices.values():
             dev.read_eth_core_training_status.assert_not_called()
             dev.get_soc_descriptor.assert_not_called()
+
+
+class TestClassifyPortsDown:
+    def test_down_only(self):
+        links = [port(4, "UP"), port(9, "DOWN"), port(2, "UNUSED"), port(3, "UNKNOWN"), port(11, "DOWN")]
+        assert topology.classify_ports(links) == {"down": [9, 11]}
+
+    def test_unused_is_not_down(self):
+        assert topology.classify_ports([port(0, "UNUSED")]) == {"down": []}
+
+
+class TestFormatMatrixColumns:
+    def test_extra_cols(self):
+        out = topology.format_matrix([0, 1], {(0, 1): 1}, [("DOWN", {0: "2"})])
+        lines = out.splitlines()
+        assert lines[0].split() == ["C0", "C1", "DOWN"]
+        assert lines[1].split() == ["C0", "X", "ETH1", "2"]
+        assert lines[2].split() == ["C1", "ETH1", "X", "N/A"]
+
+
+class TestDownList:
+    def test_lines(self):
+        ports = {0: {"down": [9, 11]}, 1: None, 2: {"down": []}}
+        assert topology.format_down_list(ports, {}) == ["chip 0: ch 9 DOWN", "chip 0: ch 11 DOWN"]
+
+    def test_marks_peer_seen_up(self):
+        conn = bidir((0, 9, 1, 3))
+        assert topology.format_down_list({0: {"down": [9]}}, conn) == [
+            "chip 0: ch 9 DOWN (peer C1 ch 3 reported UP at discovery)"
+        ]
+
+
+def test_legend_down_lines():
+    text = topology.format_legend()
+    assert "DOWN" in text and "N/A" in text
+
+
+class TestDownBackend:
+    def out(self, backend, capsys):
+        backend.print_topology()
+        return capsys.readouterr().out
+
+    def test_down_counts(self):
+        topo = qb_backend().get_topology()
+        assert topo["ports"][0]["down"] == [9]
+        assert topo["ports"][1]["down"] == []
+        assert topo["reasons"] == {}
+
+    def test_eth_read_error_one_chip(self):
+        eth = {0: RuntimeError("noc timeout"), 1: qb_ports(1), 2: qb_ports(2), 3: qb_ports(3)}
+        topo = qb_backend(eth=eth).get_topology()
+        assert topo["ports"][0] is None
+        assert topo["reasons"][0] == "eth status read failed: noc timeout"
+        assert topo["ports"][1]["down"] == []
+
+    def test_down_column_and_list(self, capsys):
+        out = self.out(qb_backend(), capsys)
+        lines = out.splitlines()
+        assert lines[1].split()[:5] == ["C0", "C1", "C2", "C3", "DOWN"]
+        assert lines[2].split()[:6] == ["C0", "X", "ETH2", "ETH2", "-", "1"]
+        assert lines[3].split()[:6] == ["C1", "ETH2", "X", "-", "ETH2", "0"]
+        assert "DOWN ports:" in out
+        assert "  chip 0: ch 9 DOWN" in out
+
+    def test_single_chip_supported(self, capsys):
+        out = self.out(make_topo_backend({0: make_dev()}, {}, eth={0: [port(0, "UNUSED")]}), capsys)
+        assert out.splitlines()[2].split()[:3] == ["C0", "X", "0"]
+        assert "DOWN ports:" not in out
+
+    def test_mixed_support_reasons_grouped(self, capsys):
+        devices = {0: make_dev(ARCH.WORMHOLE_B0), 1: make_dev(ARCH.WORMHOLE_B0, remote=True), 2: make_dev()}
+        backend = make_topo_backend(
+            devices,
+            bidir((0, 8, 1, 0), (0, 9, 1, 1)),
+            eth={0: None, 1: None, 2: [port(0, "UNUSED")]},
+            reasons={0: "not supported on Wormhole", 1: "not supported on Wormhole"},
+        )
+        out = self.out(backend, capsys)
+        lines = out.splitlines()
+        assert lines[2].split()[:5] == ["C0", "X", "ETH2", "-", "N/A"]
+        assert lines[3].split()[:5] == ["C1", "ETH2", "X", "-", "N/A"]
+        assert lines[4].split()[:5] == ["C2", "-", "-", "X", "0"]
+        assert "N/A for C0, C1: not supported on Wormhole" in out
+        assert out.count("not supported on Wormhole") == 1
+
+    def test_down_list_marks_asymmetric(self, capsys):
+        eth = {i: qb_ports(i) for i in range(4)}
+        eth[0] = [p if p["channel"] != 4 else port(4, "DOWN") for p in eth[0]]
+        out = self.out(qb_backend(eth=eth), capsys)
+        assert "chip 0: ch 4 DOWN (peer C1 ch 4 reported UP at discovery)" in out
+        assert out.splitlines()[2].split()[:3] == ["C0", "X", "ETH2"]
 
 
 class TestTopoMatrixArgs:

@@ -580,26 +580,58 @@ class TTSMIBackend:
                 print(line)
 
     def get_topology(self) -> Optional[Dict]:
-        """Chip-to-chip eth links from the discovery-time ClusterDescriptor. No device reads.
-        None with --use_luwen."""
+        """Chip-to-chip eth topology. Links from the discovery-time ClusterDescriptor;
+        DOWN from per-port status (local BH, new tt-umd). None with --use_luwen."""
         if not self.use_umd:
             return None
+        chips = sorted(self.devices)
         connections = self.umd_cluster_descriptor.get_ethernet_connections()
-        return {"chips": sorted(self.devices), "counts": topology.count_links(connections)}
+        ports: Dict[int, Optional[Dict[str, List[int]]]] = {}
+        reasons: Dict[int, str] = {}
+        for i in chips:
+            try:
+                links = self.get_ethernet_status(i)
+            except Exception as e:
+                links = None
+                reasons[i] = f"eth status read failed: {e}"
+            if links is None:
+                ports[i] = None
+                if i not in reasons:
+                    reasons[i] = self.get_ethernet_not_supported_reason(i)
+            else:
+                ports[i] = topology.classify_ports(links)
+        return {
+            "chips": chips,
+            "connections": connections,
+            "counts": topology.count_links(connections),
+            "ports": ports,
+            "reasons": reasons,
+        }
 
     def print_topology(self):
-        """Print nvidia-smi topo -m style eth matrix and legend"""
+        """Print nvidia-smi topo -m style eth matrix, legend, N/A reasons and DOWN ports"""
         topo = self.get_topology()
         if topo is None:
             print("Ethernet topology not supported with --use_luwen.")
             return
-        chips = topo["chips"]
+        chips, ports = topo["chips"], topo["ports"]
+        cols = [("DOWN", {i: str(len(p["down"])) for i, p in ports.items() if p is not None})]
         print(f"Ethernet topology ({len(chips)} chip{'s' if len(chips) != 1 else ''})")
-        print(topology.format_matrix(chips, topo["counts"]))
+        print(topology.format_matrix(chips, topo["counts"], cols))
         print()
         print(topology.format_legend())
+        by_reason: Dict[str, List[int]] = {}
+        for i, reason in sorted(topo["reasons"].items()):
+            by_reason.setdefault(reason, []).append(i)
+        for reason, ids in by_reason.items():
+            print(f"N/A for {', '.join(f'C{i}' for i in ids)}: {reason}")
         if not any(a != b for (a, b) in topo["counts"]):
             print("No chip-to-chip Ethernet links found.")
+        down = topology.format_down_list(ports, topo["connections"])
+        if down:
+            print("DOWN ports:")
+            for line in down:
+                print(f"  {line}")
 
     def get_board_id(self, board_num) -> str:
         """Read board id from CSM or SPI if FW is not loaded"""
