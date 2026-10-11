@@ -17,6 +17,7 @@ from tt_smi import log
 from pathlib import Path
 from rich.table import Table
 from tt_smi import constants
+from tt_smi import topology
 from rich import get_console
 from rich.syntax import Syntax
 from typing import Any, Dict, List, Optional, Union
@@ -577,6 +578,28 @@ class TTSMIBackend:
                 line += f" speed {train if train is not None else '-':>4} Gbps"
                 line += f" target {target if target is not None else '-':>4} Gbps"
                 print(line)
+
+    def get_topology(self) -> Optional[Dict]:
+        """Chip-to-chip eth links from the discovery-time ClusterDescriptor. No device reads.
+        None with --use_luwen."""
+        if not self.use_umd:
+            return None
+        connections = self.umd_cluster_descriptor.get_ethernet_connections()
+        return {"chips": sorted(self.devices), "counts": topology.count_links(connections)}
+
+    def print_topology(self):
+        """Print nvidia-smi topo -m style eth matrix and legend"""
+        topo = self.get_topology()
+        if topo is None:
+            print("Ethernet topology not supported with --use_luwen.")
+            return
+        chips = topo["chips"]
+        print(f"Ethernet topology ({len(chips)} chip{'s' if len(chips) != 1 else ''})")
+        print(topology.format_matrix(chips, topo["counts"]))
+        print()
+        print(topology.format_legend())
+        if not any(a != b for (a, b) in topo["counts"]):
+            print("No chip-to-chip Ethernet links found.")
 
     def get_board_id(self, board_num) -> str:
         """Read board id from CSM or SPI if FW is not loaded"""

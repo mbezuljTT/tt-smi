@@ -162,6 +162,13 @@ def parse_args():
         ),
         dest="eth_status",
     )
+    parser.add_argument(
+        "--topo_matrix",
+        default=False,
+        action="store_true",
+        help="Print chip-to-chip Ethernet connection matrix (like nvidia-smi topo --matrix).",
+        dest="topo_matrix",
+    )
     args = parser.parse_args()
     if args.eth_status is not None and (
         args.snapshot
@@ -174,6 +181,20 @@ def parse_args():
     ):
         parser.error(
             "--eth_status cannot be used with -s, -f, -r, -ls, -glx_reset, -glx_reset_auto or -glx_list_tray_to_device"
+        )
+    if args.topo_matrix and (
+        args.snapshot
+        or args.filename is not False
+        or args.reset is not None
+        or args.list
+        or args.glx_reset
+        or args.glx_reset_auto
+        or args.glx_list_tray_to_device
+        or args.eth_status is not None
+    ):
+        parser.error(
+            "--topo_matrix cannot be used with -s, -f, -r, -ls, -glx_reset, -glx_reset_auto, "
+            "-glx_list_tray_to_device or --eth_status"
         )
     return args
 
@@ -206,6 +227,9 @@ def tt_smi_main(backend: TTSMIBackend, args):
         sys.exit(0)
     if args.eth_status is not None:
         backend.print_ethernet_status(parse_smi_device_input(args.eth_status))
+        sys.exit(0)
+    if args.topo_matrix:
+        backend.print_topology()
         sys.exit(0)
     if args.snapshot or args.filename == "-":  # If we pass '-s' or '-f -"
         backend.print_logs_to_stdout(pretty=backend.pretty_output)

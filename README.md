@@ -105,7 +105,7 @@ Running tt-smi with the ```-h, --help``` flag displays the help text.
 
 ```
 $ tt-smi -h
-usage: tt-smi [-h] [-l] [-v] [-s] [-ls] [-f [snapshot filename]] [-c] [-r [TARGETS ...]] [--snapshot_no_tty] [-glx_reset] [-glx_reset_auto] [-glx_list_tray_to_device] [--no_reinit] [--use_luwen] [--eth_status [TARGETS ...]]
+usage: tt-smi [-h] [-l] [-v] [-s] [-ls] [-f [snapshot filename]] [-c] [-r [TARGETS ...]] [--snapshot_no_tty] [-glx_reset] [-glx_reset_auto] [-glx_list_tray_to_device] [--no_reinit] [--use_luwen] [--eth_status [TARGETS ...]] [--topo_matrix]
 
 Tenstorrent System Management Interface (TT-SMI) is a command line utility to interact with all Tenstorrent devices on host. The main objective of TT-SMI is to provide a simple and easy-to-use
 interface to display devices, device telemetry, and system information. TT-SMI is also used to issue board-level resets.
@@ -132,6 +132,7 @@ options:
   --use_luwen           Use deprecated Luwen driver instead of UMD (default).
   --eth_status [TARGETS ...]
                         Print per-link Ethernet status (Blackhole only): link state, train and target speed (Gbps). Targets as for -r. Omit targets or use 'all' for all devices.
+  --topo_matrix         Print chip-to-chip Ethernet connection matrix (like nvidia-smi topo --matrix).
   ```
 
 These options will be discussed in more detail in the following sections.
