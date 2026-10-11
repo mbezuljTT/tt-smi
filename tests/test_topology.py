@@ -17,6 +17,11 @@ HOST_INFO = {k: "" for k in ("OS", "Distro", "Kernel", "Hostname", "Platform", "
 HOST_SW_VERS = {"tt_smi": "", "pyluwen": "", "tt_umd": ""}
 
 
+@pytest.fixture(autouse=True)
+def _clean_visible_devices(monkeypatch):
+    monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
+
+
 def bidir(*links):
     """links: (chip_a, chan_a, chip_b, chan_b). UMD-style map with both directions."""
     conn = {}
@@ -293,6 +298,11 @@ class TestOffHostBackend:
         topo = qb_backend(unhealthy=[2]).get_topology()
         assert any("unhealthy" in w and "C2" in w and "Off-host" in w for w in topo["warnings"])
 
+    def test_no_off_host_warnings_when_na_everywhere(self, monkeypatch):
+        monkeypatch.setenv("TT_VISIBLE_DEVICES", "0")
+        backend = make_topo_backend({0: make_dev(ARCH.WORMHOLE_B0)}, {}, eth={0: None}, unhealthy=[1])
+        assert backend.get_topology()["warnings"] == []
+
     def test_visible_devices_warns_off_host(self, monkeypatch):
         monkeypatch.setenv("TT_VISIBLE_DEVICES", "0,1")
         topo = qb_backend().get_topology()
@@ -442,9 +452,14 @@ class TestPciePath:
         b = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:00.1"]
         assert topology.classify_pcie_path(a, b, "0", "0") == "PIX"
 
-    def test_pxb_multiple_bridges(self):
+    def test_pix_single_switch(self):
         a = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:01.0", "0000:03:00.0"]
         b = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:02.0", "0000:04:00.0"]
+        assert topology.classify_pcie_path(a, b, "0", "0") == "PIX"
+
+    def test_pxb_cascaded_switches(self):
+        a = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:01.0", "0000:03:00.0", "0000:04:01.0", "0000:05:00.0"]
+        b = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:02.0", "0000:06:00.0"]
         assert topology.classify_pcie_path(a, b, "0", "0") == "PXB"
 
     def test_phb_same_root(self):

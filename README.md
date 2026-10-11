@@ -253,22 +253,22 @@ Per-link Ethernet status for local Blackhole chips (UMD only). Read on first ope
 | `Off-host` | UP ports whose peer is not a chip in this session, usually a cable to another host. Also counts links to chips hidden by `TT_VISIBLE_DEVICES` or unhealthy, ports skipped by discovery, and ports trained after discovery. tt-smi warns when it detects the first two. |
 | `CPU Affinity` | `local_cpulist` of the chip's PCI device in sysfs (CPUs with locality to the card). `N/A` for remote chips or unreadable sysfs. |
 | `NUMA Affinity` | `numa_node` of the chip's PCI device. `N/A` when -1, or for remote chips. |
-| `SYS`, `NODE`, `PHB`, `PXB`, `PIX` | PCIe path class (nvidia-smi semantics): `SYS` crosses NUMA nodes, `NODE` crosses host bridges within a NUMA node, `PHB` traverses a PCIe host bridge, `PXB` crosses multiple PCIe bridges, `PIX` crosses at most a single PCIe bridge. Shown only in cells with no Ethernet link, and only between local chips. |
+| `SYS`, `NODE`, `PHB`, `PXB`, `PIX` | PCIe path class (nvidia-smi semantics): `SYS` crosses NUMA nodes, `NODE` crosses host bridges within a NUMA node, `PHB` traverses a PCIe host bridge, `PXB` crosses multiple PCIe switches (no host bridge), `PIX` crosses at most a single PCIe switch (no host bridge). Shown only in cells with no Ethernet link, and only between local chips. |
 | `N/A` | Not available for this chip; the reason is printed below the legend |
 
 The matrix works with any tt-umd. DOWN and Off-host need local Blackhole chips and a tt-umd with the TTDevice eth getters (same requirement as `--eth_status`). Channels are logical Ethernet channels, the same numbering as `--eth_status`.
 
 `-s` / `-f` snapshots include a top-level `topology` object: per chip, the `links` list (`channel`, `peer_chip`, `peer_channel`), `down_channels` and the `off_host` count, or a `note` with the reason they are unavailable.
 
-Example (4x p150, chip 0 ch 9 DOWN, chip 3 cabled to another host):
+Example (dual-socket host, 4x p150, chip 0 ch 9 DOWN, chip 3 cabled to another host):
 
 ```
 Ethernet topology (4 chips)
-      C0     C1     C2     C3     DOWN   Off-host
-C0    X      ETH2   ETH2   -      1      0
-C1    ETH2   X      -      ETH2   0      0
-C2    ETH2   -      X      ETH2   0      0
-C3    -      ETH2   ETH2   X      0      1
+      C0     C1     C2     C3     DOWN   Off-host   CPU Affinity   NUMA Affinity
+C0    X      ETH2   ETH2   SYS    1      0          0-15,32-47     0
+C1    ETH2   X      SYS    ETH2   0      0          0-15,32-47     0
+C2    ETH2   SYS    X      ETH2   0      0          16-31,48-63    1
+C3    SYS    ETH2   ETH2   X      0      1          16-31,48-63    1
 
 Legend:
   X        = Self
@@ -279,6 +279,12 @@ Legend:
              another host; also links to chips hidden by TT_VISIBLE_DEVICES or
              unhealthy, ports skipped by discovery, or ports trained after discovery
   N/A      = Not available for this chip (reason below)
+  (cells without an Ethernet link, local chips only:)
+  SYS      = PCIe path crosses NUMA nodes
+  NODE     = PCIe path crosses host bridges within a NUMA node
+  PHB      = PCIe path traverses a PCIe host bridge
+  PXB      = PCIe path crosses multiple PCIe switches, no host bridge
+  PIX      = PCIe path crosses at most a single PCIe switch, no host bridge
 DOWN ports:
   chip 0: ch 9 DOWN
 ```

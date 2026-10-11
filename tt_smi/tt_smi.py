@@ -230,11 +230,15 @@ def tt_smi_main(backend: TTSMIBackend, args):
         backend.print_ethernet_status(parse_smi_device_input(args.eth_status))
         sys.exit(0)
     if args.topo_matrix:
-        backend.print_topology(
-            extra_cols=backend.get_affinity_cols(),
-            pcie_cells=backend.get_pcie_cells(),
-            legend_extra=topology.PCIE_LEGEND_LINES,
-        )
+        if not backend.use_umd:
+            backend.print_topology()
+        else:
+            pcie_cells = backend.get_pcie_cells()
+            backend.print_topology(
+                extra_cols=backend.get_affinity_cols(),
+                pcie_cells=pcie_cells,
+                legend_extra=topology.PCIE_LEGEND_LINES if pcie_cells else None,
+            )
         sys.exit(0)
     if args.snapshot or args.filename == "-":  # If we pass '-s' or '-f -"
         backend.print_logs_to_stdout(pretty=backend.pretty_output)

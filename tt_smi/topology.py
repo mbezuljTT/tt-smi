@@ -108,8 +108,8 @@ PCIE_LEGEND_LINES = [
     "  SYS      = PCIe path crosses NUMA nodes",
     "  NODE     = PCIe path crosses host bridges within a NUMA node",
     "  PHB      = PCIe path traverses a PCIe host bridge",
-    "  PXB      = PCIe path crosses multiple PCIe bridges, no host bridge",
-    "  PIX      = PCIe path crosses at most a single PCIe bridge",
+    "  PXB      = PCIe path crosses multiple PCIe switches, no host bridge",
+    "  PIX      = PCIe path crosses at most a single PCIe switch, no host bridge",
 ]
 
 
@@ -123,7 +123,13 @@ def parse_numa_node(text: str) -> str:
 
 
 def classify_pcie_path(path_a: List[str], path_b: List[str], numa_a: str, numa_b: str) -> str:
-    """nvidia-smi style PCIe relationship from sysfs device path components."""
+    """nvidia-smi style PCIe relationship from sysfs device path components.
+
+    SYS: different NUMA nodes. NODE: different root complexes. PHB: only the root
+    complex is shared (path goes through the host bridge). Otherwise count the
+    bridges below the deepest shared ancestor on each side: PIX if at most one
+    on both sides (a single PCIe switch), PXB if more (cascaded switches).
+    """
     if numa_a != "N/A" and numa_b != "N/A" and numa_a != numa_b:
         return "SYS"
     if path_a[0] != path_b[0]:
@@ -135,5 +141,6 @@ def classify_pcie_path(path_a: List[str], path_b: List[str], numa_a: str, numa_b
         common += 1
     if common <= 1:  # only the root complex is shared
         return "PHB"
-    bridges = (len(path_a) - 1 - common) + (len(path_b) - 1 - common) + 1
-    return "PIX" if bridges <= 1 else "PXB"
+    depth_a = len(path_a) - 1 - common
+    depth_b = len(path_b) - 1 - common
+    return "PIX" if depth_a <= 1 and depth_b <= 1 else "PXB"

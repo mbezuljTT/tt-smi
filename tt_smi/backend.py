@@ -634,13 +634,14 @@ class TTSMIBackend:
             else:
                 ports[i] = topology.classify_ports(i, links, connections)
         warnings = []
-        unhealthy = sorted(list(self.umd_cluster_descriptor.get_unhealthy_devices() or []))
+        has_off_host = any(p is not None for p in ports.values())
+        unhealthy = sorted(list(self.umd_cluster_descriptor.get_unhealthy_devices() or [])) if has_off_host else []
         if unhealthy:
             warnings.append(
                 "unhealthy chips " + ", ".join(f"C{c}" for c in unhealthy)
                 + ": links to them are counted as Off-host"
             )
-        if os.environ.get("TT_VISIBLE_DEVICES"):
+        if has_off_host and os.environ.get("TT_VISIBLE_DEVICES"):
             warnings.append("TT_VISIBLE_DEVICES is set: links to hidden local chips are counted as Off-host")
         return {
             "chips": chips,
