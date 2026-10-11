@@ -36,10 +36,11 @@ def port(channel, link):
     return {"channel": channel, "core": "0-0", "link": link, "train_speed_gbps": None, "target_speed_gbps": None}
 
 
-def make_topo_backend(devices, connections, eth=None, reasons=None, use_umd=True):
+def make_topo_backend(devices, connections, eth=None, reasons=None, unhealthy=(), use_umd=True):
     """eth: {chip: list of port dicts, None, or an Exception to raise}. reasons: {chip: str}."""
     desc = MagicMock()
     desc.get_ethernet_connections.return_value = connections
+    desc.get_unhealthy_devices.return_value = list(unhealthy)
     with patch("tt_smi.backend.get_host_info", return_value=HOST_INFO), patch(
         "tt_smi.backend.get_host_software_versions", return_value=HOST_SW_VERS
     ):
@@ -78,6 +79,16 @@ def qb_backend(**kw):
         3: qb_ports(3),
     }
     return make_topo_backend({i: make_dev() for i in range(4)}, QB_CONN, eth=eth, **kw)
+
+
+def qb_eth_off_host():
+    """QuietBox ports: chip 0 ch 9 DOWN, chip 3 ch 10 UP to another host."""
+    return {
+        0: qb_ports(0, [(9, "DOWN"), (0, "UNUSED")]),
+        1: qb_ports(1),
+        2: qb_ports(2),
+        3: qb_ports(3, [(10, "UP")]),
+    }
 
 
 class TestCountLinks:
@@ -159,13 +170,22 @@ class TestPrintTopology:
             dev.get_soc_descriptor.assert_not_called()
 
 
-class TestClassifyPortsDown:
-    def test_down_only(self):
-        links = [port(4, "UP"), port(9, "DOWN"), port(2, "UNUSED"), port(3, "UNKNOWN"), port(11, "DOWN")]
-        assert topology.classify_ports(links) == {"down": [9, 11]}
+class TestClassifyPorts:
+    def test_down_and_off_host(self):
+        conn = bidir((0, 4, 1, 6))
+        links = [port(4, "UP"), port(5, "UP"), port(9, "DOWN"), port(2, "UNUSED"), port(3, "UNKNOWN")]
+        assert topology.classify_ports(0, links, conn) == {"down": [9], "off_host": [5]}
 
     def test_unused_is_not_down(self):
-        assert topology.classify_ports([port(0, "UNUSED")]) == {"down": []}
+        assert topology.classify_ports(0, [port(0, "UNUSED")], {}) == {"down": [], "off_host": []}
+
+    def test_classify_down_port_present_in_connections(self):
+        # Local side FAIL now, but peer saw it trained at discovery: in map -> DOWN, never Off-host.
+        conn = bidir((0, 9, 1, 3))
+        assert topology.classify_ports(0, [port(9, "DOWN")], conn) == {"down": [9], "off_host": []}
+
+    def test_chip_missing_from_connections(self):
+        assert topology.classify_ports(3, [port(1, "UP")], {}) == {"down": [], "off_host": [1]}
 
 
 class TestFormatMatrixColumns:
@@ -248,6 +268,47 @@ class TestDownBackend:
         out = self.out(qb_backend(eth=eth), capsys)
         assert "chip 0: ch 4 DOWN (peer C1 ch 4 reported UP at discovery)" in out
         assert out.splitlines()[2].split()[:3] == ["C0", "X", "ETH2"]
+
+
+def test_legend_off_host_lines():
+    text = topology.format_legend()
+    assert "Off-host" in text and "TT_VISIBLE_DEVICES" in text and "another" in text
+
+
+class TestOffHostBackend:
+    def out(self, backend, capsys):
+        backend.print_topology()
+        return capsys.readouterr().out
+
+    def test_off_host_counts(self, monkeypatch):
+        monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
+        topo = qb_backend(eth=qb_eth_off_host()).get_topology()
+        assert topo["ports"][0] == {"down": [9], "off_host": []}
+        assert topo["ports"][3] == {"down": [], "off_host": [10]}
+        assert topo["warnings"] == []
+
+    def test_unhealthy_chip_warns_off_host(self):
+        topo = qb_backend(unhealthy=[2]).get_topology()
+        assert any("unhealthy" in w and "C2" in w and "Off-host" in w for w in topo["warnings"])
+
+    def test_visible_devices_warns_off_host(self, monkeypatch):
+        monkeypatch.setenv("TT_VISIBLE_DEVICES", "0,1")
+        topo = qb_backend().get_topology()
+        assert any("TT_VISIBLE_DEVICES" in w and "Off-host" in w for w in topo["warnings"])
+
+    def test_off_host_column(self, capsys):
+        out = self.out(qb_backend(eth=qb_eth_off_host()), capsys)
+        lines = out.splitlines()
+        assert lines[1].split()[:6] == ["C0", "C1", "C2", "C3", "DOWN", "Off-host"]
+        assert lines[2].split()[:7] == ["C0", "X", "ETH2", "ETH2", "-", "1", "0"]
+        assert lines[5].split()[:7] == ["C3", "-", "ETH2", "ETH2", "X", "0", "1"]
+
+    def test_off_host_na_for_unsupported(self, capsys):
+        backend = make_topo_backend({0: make_dev(ARCH.WORMHOLE_B0)}, {}, eth={0: None})
+        assert self.out(backend, capsys).splitlines()[2].split()[:4] == ["C0", "X", "N/A", "N/A"]
+
+    def test_warnings_printed(self, capsys):
+        assert "WARNING: unhealthy chips C2" in self.out(qb_backend(unhealthy=[2]), capsys)
 
 
 class TestTopoMatrixArgs:

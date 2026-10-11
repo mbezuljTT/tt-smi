@@ -15,13 +15,19 @@ LEGEND_LINES = [
     "  ETH<n>   = Connected by <n> trained Ethernet link(s)",
     "  -        = No direct Ethernet link",
     "  DOWN     = Ports that failed link training (far end unknown; listed below)",
+    "  Off-host = UP ports whose peer is not a chip in this session: usually a cable to",
+    "             another host; also links to chips hidden by TT_VISIBLE_DEVICES or",
+    "             unhealthy, ports skipped by discovery, or ports trained after discovery",
     "  N/A      = Not available for this chip (reason below)",
 ]
 
 
-def classify_ports(eth_links: List[Dict]) -> Dict[str, List[int]]:
-    """DOWN = link 'DOWN' (UMD EthTrainingStatus FAIL). UNUSED is not DOWN."""
-    return {"down": sorted(l["channel"] for l in eth_links if l["link"] == "DOWN")}
+def classify_ports(chip: int, eth_links: List[Dict], connections: Connections) -> Dict[str, List[int]]:
+    """DOWN = link 'DOWN' (FAIL). Off-host = link 'UP' with no entry in the connections map."""
+    local = connections.get(chip, {})
+    down = sorted(l["channel"] for l in eth_links if l["link"] == "DOWN")
+    off_host = sorted(l["channel"] for l in eth_links if l["link"] == "UP" and l["channel"] not in local)
+    return {"down": down, "off_host": off_host}
 
 
 def list_links(connections: Connections) -> List[Tuple[int, int, int, int]]:

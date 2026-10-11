@@ -599,13 +599,23 @@ class TTSMIBackend:
                 if i not in reasons:
                     reasons[i] = self.get_ethernet_not_supported_reason(i)
             else:
-                ports[i] = topology.classify_ports(links)
+                ports[i] = topology.classify_ports(i, links, connections)
+        warnings = []
+        unhealthy = sorted(list(self.umd_cluster_descriptor.get_unhealthy_devices() or []))
+        if unhealthy:
+            warnings.append(
+                "unhealthy chips " + ", ".join(f"C{c}" for c in unhealthy)
+                + ": links to them are counted as Off-host"
+            )
+        if os.environ.get("TT_VISIBLE_DEVICES"):
+            warnings.append("TT_VISIBLE_DEVICES is set: links to hidden local chips are counted as Off-host")
         return {
             "chips": chips,
             "connections": connections,
             "counts": topology.count_links(connections),
             "ports": ports,
             "reasons": reasons,
+            "warnings": warnings,
         }
 
     def print_topology(self):
@@ -615,7 +625,10 @@ class TTSMIBackend:
             print("Ethernet topology not supported with --use_luwen.")
             return
         chips, ports = topo["chips"], topo["ports"]
-        cols = [("DOWN", {i: str(len(p["down"])) for i, p in ports.items() if p is not None})]
+        cols = [
+            ("DOWN", {i: str(len(p["down"])) for i, p in ports.items() if p is not None}),
+            ("Off-host", {i: str(len(p["off_host"])) for i, p in ports.items() if p is not None}),
+        ]
         print(f"Ethernet topology ({len(chips)} chip{'s' if len(chips) != 1 else ''})")
         print(topology.format_matrix(chips, topo["counts"], cols))
         print()
@@ -625,6 +638,8 @@ class TTSMIBackend:
             by_reason.setdefault(reason, []).append(i)
         for reason, ids in by_reason.items():
             print(f"N/A for {', '.join(f'C{i}' for i in ids)}: {reason}")
+        for w in topo["warnings"]:
+            print(f"WARNING: {w}")
         if not any(a != b for (a, b) in topo["counts"]):
             print("No chip-to-chip Ethernet links found.")
         down = topology.format_down_list(ports, topo["connections"])
