@@ -20,7 +20,7 @@ from tt_smi import constants
 from tt_smi import topology
 from rich import get_console
 from rich.syntax import Syntax
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from rich.progress import track
 from tt_tools_common.ui_common.themes import CMD_LINE_COLOR
 from pyluwen import PciChip
@@ -651,7 +651,7 @@ class TTSMIBackend:
             "warnings": warnings,
         }
 
-    def print_topology(self):
+    def print_topology(self, extra_cols: Optional[List[Tuple[str, Dict[int, str]]]] = None):
         """Print nvidia-smi topo -m style eth matrix, legend, N/A reasons and DOWN ports"""
         topo = self.get_topology()
         if topo is None:
@@ -661,7 +661,7 @@ class TTSMIBackend:
         cols = [
             ("DOWN", {i: str(len(p["down"])) for i, p in ports.items() if p is not None}),
             ("Off-host", {i: str(len(p["off_host"])) for i, p in ports.items() if p is not None}),
-        ]
+        ] + list(extra_cols or [])
         print(f"Ethernet topology ({len(chips)} chip{'s' if len(chips) != 1 else ''})")
         print(topology.format_matrix(chips, topo["counts"], cols))
         print()
@@ -680,6 +680,31 @@ class TTSMIBackend:
             print("DOWN ports:")
             for line in down:
                 print(f"  {line}")
+
+    def get_pci_affinity(self, board_num) -> Tuple[str, str]:
+        """(local_cpulist, numa_node) from PCI sysfs. N/A for remote chips or unreadable sysfs."""
+        bdf = self.get_pci_bdf(board_num)
+        if bdf == "N/A":
+            return ("N/A", "N/A")
+        base = os.path.join(constants.SYSFS_ROOT, "bus", "pci", "devices", bdf)
+        try:
+            with open(os.path.join(base, "local_cpulist")) as f:
+                cpus = f.read().strip() or "N/A"
+        except OSError:
+            cpus = "N/A"
+        try:
+            with open(os.path.join(base, "numa_node")) as f:
+                numa = topology.parse_numa_node(f.read())
+        except OSError:
+            numa = "N/A"
+        return (cpus, numa)
+
+    def get_affinity_cols(self) -> List[Tuple[str, Dict[int, str]]]:
+        aff = {i: self.get_pci_affinity(i) for i in self.devices}
+        return [
+            ("CPU Affinity", {i: a[0] for i, a in aff.items()}),
+            ("NUMA Affinity", {i: a[1] for i, a in aff.items()}),
+        ]
 
     def get_board_id(self, board_num) -> str:
         """Read board id from CSM or SPI if FW is not loaded"""

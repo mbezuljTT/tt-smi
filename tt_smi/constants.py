@@ -16,6 +16,9 @@ def get_default_discovery_options():
     options.unexpected_routing_firmware_config = TopologyDiscoveryOptions.Action.IGNORE
     return options
 
+# Root of sysfs; overridden in tests.
+SYSFS_ROOT = "/sys"
+
 SMBUS_TELEMETRY_LIST = [
     "BOARD_ID",
     "ENUM_VERSION",

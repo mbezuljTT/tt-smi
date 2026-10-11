@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from tt_umd import ARCH
 from tt_smi import topology
+from tt_smi import constants
 from tt_smi.backend import TTSMIBackend
 from tt_smi.tt_smi import parse_args
 
@@ -25,10 +26,11 @@ def bidir(*links):
     return conn
 
 
-def make_dev(arch=ARCH.BLACKHOLE, remote=False):
+def make_dev(arch=ARCH.BLACKHOLE, remote=False, bdf="0000:01:00.0"):
     dev = MagicMock()
     dev.get_arch.return_value = arch
     dev.is_remote.return_value = remote
+    dev.get_pci_device.return_value.get_device_info.return_value.pci_bdf = bdf
     return dev
 
 
@@ -384,3 +386,49 @@ class TestSnapshotTopology:
     def test_luwen_omitted(self):
         backend = make_topo_backend({0: make_dev()}, {}, use_umd=False)
         assert "topology" not in self.snapshot(backend)
+
+
+def make_sysfs(root, bdf, cpulist=None, numa=None):
+    d = root / "bus" / "pci" / "devices" / bdf
+    d.mkdir(parents=True)
+    if cpulist is not None:
+        (d / "local_cpulist").write_text(cpulist + "\n")
+    if numa is not None:
+        (d / "numa_node").write_text(numa + "\n")
+
+
+class TestAffinity:
+    @pytest.mark.parametrize("text,expected", [("0\n", "0"), ("1", "1"), ("-1\n", "N/A"), ("", "N/A"), ("x", "N/A")])
+    def test_parse_numa_node(self, text, expected):
+        assert topology.parse_numa_node(text) == expected
+
+    def test_local_chip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(constants, "SYSFS_ROOT", str(tmp_path))
+        make_sysfs(tmp_path, "0000:01:00.0", "0-15,32-47", "0")
+        backend = make_topo_backend({0: make_dev(bdf="0000:01:00.0")}, {})
+        assert backend.get_pci_affinity(0) == ("0-15,32-47", "0")
+
+    def test_numa_minus_one(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(constants, "SYSFS_ROOT", str(tmp_path))
+        make_sysfs(tmp_path, "0000:01:00.0", "0-7", "-1")
+        backend = make_topo_backend({0: make_dev(bdf="0000:01:00.0")}, {})
+        assert backend.get_pci_affinity(0) == ("0-7", "N/A")
+
+    def test_remote_chip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(constants, "SYSFS_ROOT", str(tmp_path))
+        backend = make_topo_backend({0: make_dev(ARCH.WORMHOLE_B0, remote=True, bdf="N/A")}, {})
+        assert backend.get_pci_affinity(0) == ("N/A", "N/A")
+
+    def test_missing_sysfs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(constants, "SYSFS_ROOT", str(tmp_path))
+        backend = make_topo_backend({0: make_dev(bdf="0000:09:00.0")}, {})
+        assert backend.get_pci_affinity(0) == ("N/A", "N/A")
+
+    def test_columns_in_matrix(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(constants, "SYSFS_ROOT", str(tmp_path))
+        make_sysfs(tmp_path, "0000:01:00.0", "0-15", "0")
+        backend = make_topo_backend({0: make_dev(bdf="0000:01:00.0")}, {}, eth={0: []})
+        backend.print_topology(extra_cols=backend.get_affinity_cols())
+        lines = capsys.readouterr().out.splitlines()
+        assert "CPU Affinity" in lines[1] and "NUMA Affinity" in lines[1]
+        assert lines[2].split() == ["C0", "X", "0", "0", "0-15", "0"]

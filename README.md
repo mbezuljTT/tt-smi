@@ -251,6 +251,8 @@ Per-link Ethernet status for local Blackhole chips (UMD only). Read on first ope
 | `-` | No direct Ethernet link |
 | `DOWN` | Ports that failed link training (shown DOWN by `--eth_status`). The far end is unknown, so they are listed below the matrix as `chip N: ch X DOWN`. UNUSED ports are not counted. |
 | `Off-host` | UP ports whose peer is not a chip in this session, usually a cable to another host. Also counts links to chips hidden by `TT_VISIBLE_DEVICES` or unhealthy, ports skipped by discovery, and ports trained after discovery. tt-smi warns when it detects the first two. |
+| `CPU Affinity` | `local_cpulist` of the chip's PCI device in sysfs (CPUs with locality to the card). `N/A` for remote chips or unreadable sysfs. |
+| `NUMA Affinity` | `numa_node` of the chip's PCI device. `N/A` when -1, or for remote chips. |
 | `N/A` | Not available for this chip; the reason is printed below the legend |
 
 The matrix works with any tt-umd. DOWN and Off-host need local Blackhole chips and a tt-umd with the TTDevice eth getters (same requirement as `--eth_status`). Channels are logical Ethernet channels, the same numbering as `--eth_status`.

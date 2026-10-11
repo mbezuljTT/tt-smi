@@ -95,3 +95,12 @@ def format_down_list(ports: Dict[int, Optional[Dict[str, List[int]]]], connectio
 
 def format_legend() -> str:
     return "\n".join(LEGEND_LINES)
+
+
+def parse_numa_node(text: str) -> str:
+    """sysfs numa_node content -> display value. -1 means no NUMA affinity."""
+    try:
+        node = int(text.strip())
+    except ValueError:
+        return "N/A"
+    return "N/A" if node < 0 else str(node)
