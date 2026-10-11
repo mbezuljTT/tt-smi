@@ -1,6 +1,6 @@
 # Runbook: try `--topo_matrix` on a Galaxy
 
-Branch: `mbezulj/eth_speed` on `https://github.com/mbezuljTT/tt-smi`.
+Branch: `mbezulj/topo` on `https://github.com/mbezuljTT/tt-smi`.
 Plan: `docs/plans/2026-10-11-topo-matrix-issue-235.md`. Issue: tenstorrent/tt-smi#235.
 
 The unit tests only used mocks. This runbook is the first run on real hardware.
@@ -9,7 +9,7 @@ Record any mismatch with its output; each step says what "pass" looks like.
 ## 0. Setup
 
 ```bash
-git clone -b mbezulj/eth_speed https://github.com/mbezuljTT/tt-smi.git
+git clone -b mbezulj/topo https://github.com/mbezuljTT/tt-smi.git
 cd tt-smi
 python3 -m venv ~/venvs/tt-smi-topo
 ~/venvs/tt-smi-topo/bin/pip install -e .
