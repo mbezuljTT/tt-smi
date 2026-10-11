@@ -518,3 +518,132 @@ class TestPciePath:
         out = capsys.readouterr().out
         assert out.splitlines()[2].split()[:3] == ["C0", "X", "ETH1"]
         assert "PHB      = PCIe path traverses a PCIe host bridge" in out
+
+
+def grid_counts(rows, cols, wrap_x=False, wrap_y=False, n=2):
+    """Links of a rows x cols grid of chips r * cols + c"""
+    counts = {}
+    for r in range(rows):
+        for c in range(cols):
+            a = r * cols + c
+            peers = []
+            if c + 1 < cols or wrap_x:
+                peers.append(r * cols + (c + 1) % cols)
+            if r + 1 < rows or wrap_y:
+                peers.append((r + 1) % rows * cols + c)
+            for b in peers:
+                counts[(min(a, b), max(a, b))] = n
+    return counts
+
+
+def grid_report(counts, n_chips):
+    grid = topology.infer_grid(list(range(n_chips)), counts)
+    return topology.format_axes(grid, counts)[2:], topology.format_grid_map(grid, counts), topology.check_grid_links(
+        grid, counts
+    )
+
+
+class TestInferGrid:
+    def test_mesh(self):
+        axes, _, _ = grid_report(grid_counts(8, 4), 32)
+        assert axes == ["X: mesh / LINE, wrap links on 0 of 8 rows", "Y: mesh / LINE, wrap links on 0 of 4 columns"]
+
+    def test_torus(self):
+        axes, _, _ = grid_report(grid_counts(8, 4, wrap_x=True, wrap_y=True), 32)
+        assert axes == ["X: torus / RING, wrap links on 8 of 8 rows", "Y: torus / RING, wrap links on 4 of 4 columns"]
+
+    def test_torus_on_x_only(self):
+        axes, _, _ = grid_report(grid_counts(8, 4, wrap_x=True), 32)
+        assert axes == ["X: torus / RING, wrap links on 8 of 8 rows", "Y: mesh / LINE, wrap links on 0 of 4 columns"]
+
+    def test_partial_torus(self):
+        counts = grid_counts(8, 4, wrap_x=True)
+        del counts[(0, 3)]
+        axes, _, check = grid_report(counts, 32)
+        assert axes[0] == "X: partial torus, wrap links on 7 of 8 rows"
+        assert len([line for line in check if "missing" in line]) == 1
+
+    def test_axis_too_short(self):
+        axes, _, _ = grid_report(grid_counts(2, 2), 4)
+        assert axes == ["X: 2 chips, too short to tell mesh from torus", "Y: 2 chips, too short to tell mesh from torus"]
+
+    def test_no_links_no_grid(self):
+        assert topology.infer_grid([0, 1, 2], {}) is None
+
+    def test_tolerates_missing_link(self):
+        counts = grid_counts(4, 4)
+        del counts[(5, 6)]
+        assert topology.infer_grid(list(range(16)), counts) is not None
+
+
+class TestGridMap:
+    def test_mesh(self):
+        _, grid_map, _ = grid_report(grid_counts(3, 2), 6)
+        assert grid_map[0].startswith("Map:")
+        assert grid_map[1].split() == ["x0", "x1"]
+        assert len(grid_map) == 2 + 3 + 2
+        assert "~" not in "\n".join(grid_map[1:])
+
+    def test_torus_marks_wraps(self):
+        _, grid_map, _ = grid_report(grid_counts(4, 4, wrap_x=True, wrap_y=True), 16)
+        rows = [line for line in grid_map if line.startswith("y")]
+        assert len(rows) == 4 and all(line.endswith("~2") for line in rows)
+        assert grid_map[-1].split() == ["~2"] * 4
+
+    def test_missing_link_marked(self):
+        counts = grid_counts(4, 4)
+        del counts[(5, 6)]
+        _, grid_map, _ = grid_report(counts, 16)
+        assert sum(line.count("-x-") + line.count("|x") for line in grid_map) == 1
+
+
+class TestCheckGridLinks:
+    def test_no_issues(self):
+        _, _, check = grid_report(grid_counts(4, 4, wrap_x=True, wrap_y=True), 16)
+        assert check == ["Link check (usual: 2 links per grid link):", "  no issues"]
+
+    def test_issues(self):
+        counts = grid_counts(4, 4)
+        del counts[(5, 6)]
+        counts[(0, 1)] = 4
+        counts[(0, 15)] = 1
+        _, _, check = grid_report(counts, 16)
+        assert check[0] == "Link check (usual: 2 links per grid link):"
+        assert len(check) == 4
+        assert any(line.startswith("  C5 ") and "C6 " in line and line.endswith(": missing") for line in check)
+        assert any(line.startswith("  C0 ") and "C1 " in line and line.endswith(": 4 links") for line in check)
+        assert any(line.startswith("  C0 ") and line.endswith(": 1 link, not grid neighbours") for line in check)
+
+
+class TestPrintTopologyGrid:
+    def out(self, backend, capsys):
+        backend.print_topology_grid()
+        return capsys.readouterr().out
+
+    def test_quietbox(self, capsys):
+        out = self.out(qb_backend(), capsys)
+        assert out.startswith("Grid: 2 rows (Y) x 2 columns (X)")
+        assert "Map:" in out and "Link check" in out
+
+    def test_no_grid(self, capsys):
+        out = self.out(make_topo_backend({0: make_dev(), 1: make_dev()}, {}), capsys)
+        assert out == "Ethernet links of the 2 chips do not form a 2D grid.\n"
+
+    def test_luwen(self, capsys):
+        backend = make_topo_backend({0: make_dev()}, {}, use_umd=False)
+        assert "not supported with --use_luwen" in self.out(backend, capsys)
+
+
+class TestTopoGridArgs:
+    def run(self, monkeypatch, argv):
+        monkeypatch.setattr(sys, "argv", ["tt-smi"] + argv)
+        return parse_args()
+
+    def test_alone(self, monkeypatch):
+        assert self.run(monkeypatch, ["--topo_grid"]).topo_grid is True
+
+    @pytest.mark.parametrize("other", [["-s"], ["-f"], ["-r"], ["-ls"], ["--eth_status"], ["--topo_matrix"]])
+    def test_conflicts(self, monkeypatch, other):
+        with pytest.raises(SystemExit) as e:
+            self.run(monkeypatch, ["--topo_grid"] + other)
+        assert e.value.code == 2
