@@ -247,3 +247,37 @@ def format_axes(grid: Grid, counts: Dict[Tuple[int, int], int]) -> List[str]:
         kind = "torus / RING" if n == len(wraps) else "mesh / LINE" if n == 0 else "partial torus"
         lines.append(f"{axis}: {kind}, wrap links on {n} of {len(wraps)} {line_name}")
     return lines
+
+
+def format_grid_map(grid: Grid, counts: Dict[Tuple[int, int], int]) -> List[str]:
+    """Chips at their grid positions with link counts between neighbours ('x' = none).
+    ~n after a row / below a column: wrap links between its two ends, on axes with any wrap."""
+    rows, cols = grid_shape(grid)
+
+    def mark(a: int, b: int) -> str:
+        return str(counts.get(_pair(a, b), 0) or "x")
+
+    wrap_x, wrap_y = (any(wrap_links(grid, counts, axis)) for axis in ("X", "Y"))
+    cell = max(len(f"C{c}") for c in grid.values()) + 1
+    gap = max([len(mark(grid[(r, c)], grid[(r, c + 1)])) + 3 for r in range(rows) for c in range(cols - 1)] + [3])
+    left = len(f"y{rows - 1}") + 2
+    lines = [
+        "Map: n = links between neighbours, x = none, ~n = wrap links between the ends of the row / column",
+        " " * left + "".join(f"x{c:<{cell + gap - 1}}" for c in range(cols)).rstrip(),
+    ]
+    for r in range(rows):
+        row = f"{f'y{r}':<{left}}"
+        for c in range(cols):
+            row += f"{'C' + str(grid[(r, c)]):<{cell}}"
+            if c < cols - 1:
+                row += f"{'-' + mark(grid[(r, c)], grid[(r, c + 1)]) + '-':<{gap}}"
+        if wrap_x:
+            row += f" ~{mark(grid[(r, 0)], grid[(r, cols - 1)])}"
+        lines.append(row.rstrip())
+        if r < rows - 1:
+            links = (mark(grid[(r, c)], grid[(r + 1, c)]) for c in range(cols))
+            lines.append(" " * left + "".join(f"{'|' + n:<{cell + gap}}" for n in links).rstrip())
+    if wrap_y:
+        links = (mark(grid[(0, c)], grid[(rows - 1, c)]) for c in range(cols))
+        lines.append(" " * left + "".join(f"{'~' + n:<{cell + gap}}" for n in links).rstrip())
+    return lines
