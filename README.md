@@ -253,6 +253,7 @@ Per-link Ethernet status for local Blackhole chips (UMD only). Read on first ope
 | `Off-host` | UP ports whose peer is not a chip in this session, usually a cable to another host. Also counts links to chips hidden by `TT_VISIBLE_DEVICES` or unhealthy, ports skipped by discovery, and ports trained after discovery. tt-smi warns when it detects the first two. |
 | `CPU Affinity` | `local_cpulist` of the chip's PCI device in sysfs (CPUs with locality to the card). `N/A` for remote chips or unreadable sysfs. |
 | `NUMA Affinity` | `numa_node` of the chip's PCI device. `N/A` when -1, or for remote chips. |
+| `SYS`, `NODE`, `PHB`, `PXB`, `PIX` | PCIe path class (nvidia-smi semantics): `SYS` crosses NUMA nodes, `NODE` crosses host bridges within a NUMA node, `PHB` traverses a PCIe host bridge, `PXB` crosses multiple PCIe bridges, `PIX` crosses at most a single PCIe bridge. Shown only in cells with no Ethernet link, and only between local chips. |
 | `N/A` | Not available for this chip; the reason is printed below the legend |
 
 The matrix works with any tt-umd. DOWN and Off-host need local Blackhole chips and a tt-umd with the TTDevice eth getters (same requirement as `--eth_status`). Channels are logical Ethernet channels, the same numbering as `--eth_status`.

@@ -432,3 +432,74 @@ class TestAffinity:
         lines = capsys.readouterr().out.splitlines()
         assert "CPU Affinity" in lines[1] and "NUMA Affinity" in lines[1]
         assert lines[2].split() == ["C0", "X", "0", "0", "0-15", "0"]
+
+
+class TestPciePath:
+    R = "pci0000:00"
+
+    def test_pix_same_switch_port(self):
+        a = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:00.0"]
+        b = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:00.1"]
+        assert topology.classify_pcie_path(a, b, "0", "0") == "PIX"
+
+    def test_pxb_multiple_bridges(self):
+        a = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:01.0", "0000:03:00.0"]
+        b = [self.R, "0000:00:01.0", "0000:01:00.0", "0000:02:02.0", "0000:04:00.0"]
+        assert topology.classify_pcie_path(a, b, "0", "0") == "PXB"
+
+    def test_phb_same_root(self):
+        a = [self.R, "0000:00:01.0", "0000:01:00.0"]
+        b = [self.R, "0000:00:02.0", "0000:02:00.0"]
+        assert topology.classify_pcie_path(a, b, "0", "0") == "PHB"
+
+    def test_node_different_root_same_numa(self):
+        a = [self.R, "0000:00:01.0", "0000:01:00.0"]
+        b = ["pci0000:40", "0000:40:01.0", "0000:41:00.0"]
+        assert topology.classify_pcie_path(a, b, "0", "0") == "NODE"
+
+    def test_node_unknown_numa(self):
+        a = [self.R, "0000:00:01.0", "0000:01:00.0"]
+        b = ["pci0000:40", "0000:40:01.0", "0000:41:00.0"]
+        assert topology.classify_pcie_path(a, b, "N/A", "0") == "NODE"
+
+    def test_sys_different_numa(self):
+        a = [self.R, "0000:00:01.0", "0000:01:00.0"]
+        b = ["pci0000:80", "0000:80:01.0", "0000:81:00.0"]
+        assert topology.classify_pcie_path(a, b, "0", "1") == "SYS"
+
+    def test_pcie_cells_only_where_no_eth(self):
+        out = topology.format_matrix([0, 1, 2], {(0, 1): 1}, None, pcie_cells={(0, 1): "PIX", (0, 2): "SYS"})
+        lines = out.splitlines()
+        assert lines[1].split() == ["C0", "X", "ETH1", "SYS"]
+        assert lines[3].split() == ["C2", "SYS", "-", "X"]
+
+    def test_legend_extra(self):
+        assert "  PIX  = extra" in topology.format_legend(["  PIX  = extra"])
+
+    def test_backend_cells_from_sysfs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(constants, "SYSFS_ROOT", str(tmp_path))
+        for bdf, chain in (
+            ("0000:01:00.0", ["pci0000:00", "0000:00:01.0", "0000:01:00.0"]),
+            ("0000:02:00.0", ["pci0000:00", "0000:00:02.0", "0000:02:00.0"]),
+        ):
+            real = tmp_path / "devices"
+            for part in chain:
+                real = real / part
+            real.mkdir(parents=True)
+            (real / "numa_node").write_text("0\n")
+            link_dir = tmp_path / "bus" / "pci" / "devices"
+            link_dir.mkdir(parents=True, exist_ok=True)
+            (link_dir / bdf).symlink_to(real)
+        devices = {
+            0: make_dev(bdf="0000:01:00.0"),
+            1: make_dev(bdf="0000:02:00.0"),
+            2: make_dev(ARCH.WORMHOLE_B0, remote=True, bdf="N/A"),
+        }
+        assert make_topo_backend(devices, {}).get_pcie_cells() == {(0, 1): "PHB"}
+
+    def test_eth_wins_over_pcie(self, capsys):
+        backend = make_topo_backend({0: make_dev(), 1: make_dev()}, bidir((0, 4, 1, 4)), eth={0: [], 1: []})
+        backend.print_topology(pcie_cells={(0, 1): "PHB"}, legend_extra=topology.PCIE_LEGEND_LINES)
+        out = capsys.readouterr().out
+        assert out.splitlines()[2].split()[:3] == ["C0", "X", "ETH1"]
+        assert "PHB      = PCIe path traverses a PCIe host bridge" in out

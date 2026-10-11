@@ -49,20 +49,26 @@ def count_links(connections: Connections) -> Dict[Tuple[int, int], int]:
     return counts
 
 
-def _cell(a: int, b: int, counts: Dict[Tuple[int, int], int]) -> str:
+def _cell(a: int, b: int, counts: Dict[Tuple[int, int], int], pcie_cells: Dict[Tuple[int, int], str]) -> str:
     if a == b:
         return "X"
-    n = counts.get((min(a, b), max(a, b)), 0)
-    return f"ETH{n}" if n else "-"
+    key = (min(a, b), max(a, b))
+    n = counts.get(key, 0)
+    if n:
+        return f"ETH{n}"
+    return pcie_cells.get(key, "-")
 
 
 def format_matrix(
     chips: List[int],
     counts: Dict[Tuple[int, int], int],
     extra_cols: Optional[List[Tuple[str, Dict[int, str]]]] = None,
+    pcie_cells: Optional[Dict[Tuple[int, int], str]] = None,
 ) -> str:
-    """nvidia-smi topo -m style matrix. extra_cols: (header, {chip: value}); missing value -> N/A."""
+    """nvidia-smi topo -m style matrix. extra_cols: (header, {chip: value}); missing value -> N/A.
+    pcie_cells: PCIe class for pairs with no eth link."""
     extra_cols = extra_cols or []
+    pcie_cells = pcie_cells or {}
     labels = [f"C{c}" for c in chips]
     first = max([len(l) for l in labels] + [4]) + 2
     width = max([len(l) for l in labels] + [4]) + 3
@@ -71,7 +77,7 @@ def format_matrix(
     header += "".join(f"{h:<{w}}" for (h, _), w in zip(extra_cols, extra_w))
     rows = [header.rstrip()]
     for a, label in zip(chips, labels):
-        row = f"{label:<{first}}" + "".join(f"{_cell(a, b, counts):<{width}}" for b in chips)
+        row = f"{label:<{first}}" + "".join(f"{_cell(a, b, counts, pcie_cells):<{width}}" for b in chips)
         row += "".join(f"{vals.get(a, 'N/A'):<{w}}" for (_, vals), w in zip(extra_cols, extra_w))
         rows.append(row.rstrip())
     return "\n".join(rows)
@@ -93,8 +99,18 @@ def format_down_list(ports: Dict[int, Optional[Dict[str, List[int]]]], connectio
     return lines
 
 
-def format_legend() -> str:
-    return "\n".join(LEGEND_LINES)
+def format_legend(extra_lines: Optional[List[str]] = None) -> str:
+    return "\n".join(LEGEND_LINES + list(extra_lines or []))
+
+
+PCIE_LEGEND_LINES = [
+    "  (cells without an Ethernet link, local chips only:)",
+    "  SYS      = PCIe path crosses NUMA nodes",
+    "  NODE     = PCIe path crosses host bridges within a NUMA node",
+    "  PHB      = PCIe path traverses a PCIe host bridge",
+    "  PXB      = PCIe path crosses multiple PCIe bridges, no host bridge",
+    "  PIX      = PCIe path crosses at most a single PCIe bridge",
+]
 
 
 def parse_numa_node(text: str) -> str:
@@ -104,3 +120,20 @@ def parse_numa_node(text: str) -> str:
     except ValueError:
         return "N/A"
     return "N/A" if node < 0 else str(node)
+
+
+def classify_pcie_path(path_a: List[str], path_b: List[str], numa_a: str, numa_b: str) -> str:
+    """nvidia-smi style PCIe relationship from sysfs device path components."""
+    if numa_a != "N/A" and numa_b != "N/A" and numa_a != numa_b:
+        return "SYS"
+    if path_a[0] != path_b[0]:
+        return "NODE"
+    common = 0
+    for x, y in zip(path_a[:-1], path_b[:-1]):
+        if x != y:
+            break
+        common += 1
+    if common <= 1:  # only the root complex is shared
+        return "PHB"
+    bridges = (len(path_a) - 1 - common) + (len(path_b) - 1 - common) + 1
+    return "PIX" if bridges <= 1 else "PXB"

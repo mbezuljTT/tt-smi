@@ -651,7 +651,12 @@ class TTSMIBackend:
             "warnings": warnings,
         }
 
-    def print_topology(self, extra_cols: Optional[List[Tuple[str, Dict[int, str]]]] = None):
+    def print_topology(
+        self,
+        extra_cols: Optional[List[Tuple[str, Dict[int, str]]]] = None,
+        pcie_cells: Optional[Dict[Tuple[int, int], str]] = None,
+        legend_extra: Optional[List[str]] = None,
+    ):
         """Print nvidia-smi topo -m style eth matrix, legend, N/A reasons and DOWN ports"""
         topo = self.get_topology()
         if topo is None:
@@ -663,9 +668,9 @@ class TTSMIBackend:
             ("Off-host", {i: str(len(p["off_host"])) for i, p in ports.items() if p is not None}),
         ] + list(extra_cols or [])
         print(f"Ethernet topology ({len(chips)} chip{'s' if len(chips) != 1 else ''})")
-        print(topology.format_matrix(chips, topo["counts"], cols))
+        print(topology.format_matrix(chips, topo["counts"], cols, pcie_cells))
         print()
-        print(topology.format_legend())
+        print(topology.format_legend(legend_extra))
         by_reason: Dict[str, List[int]] = {}
         for i, reason in sorted(topo["reasons"].items()):
             by_reason.setdefault(reason, []).append(i)
@@ -698,6 +703,37 @@ class TTSMIBackend:
         except OSError:
             numa = "N/A"
         return (cpus, numa)
+
+    def get_pcie_path(self, board_num) -> Optional[List[str]]:
+        """sysfs device path components under <sysfs>/devices for a local chip, else None."""
+        bdf = self.get_pci_bdf(board_num)
+        if bdf == "N/A":
+            return None
+        link = os.path.join(constants.SYSFS_ROOT, "bus", "pci", "devices", bdf)
+        devices_root = os.path.realpath(os.path.join(constants.SYSFS_ROOT, "devices"))
+        real = os.path.realpath(link)
+        if not os.path.exists(real) or not real.startswith(devices_root + os.sep):
+            return None
+        return os.path.relpath(real, devices_root).split(os.sep)
+
+    def get_pcie_cells(self) -> Dict[Tuple[int, int], str]:
+        chips = sorted(self.devices)
+        paths = {i: self.get_pcie_path(i) for i in chips}
+        numa = {}
+        for i in chips:
+            numa[i] = "N/A"
+            if paths[i] is not None:
+                try:
+                    with open(os.path.join(constants.SYSFS_ROOT, "devices", *paths[i], "numa_node")) as f:
+                        numa[i] = topology.parse_numa_node(f.read())
+                except OSError:
+                    pass
+        cells = {}
+        for a in chips:
+            for b in chips:
+                if a < b and paths[a] and paths[b]:
+                    cells[(a, b)] = topology.classify_pcie_path(paths[a], paths[b], numa[a], numa[b])
+        return cells
 
     def get_affinity_cols(self) -> List[Tuple[str, Dict[int, str]]]:
         aff = {i: self.get_pci_affinity(i) for i in self.devices}
