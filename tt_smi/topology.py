@@ -5,6 +5,7 @@
 Chip-to-chip Ethernet topology helpers for --topo_matrix.
 Pure functions over ClusterDescriptor.get_ethernet_connections(). No device access.
 """
+from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
 Connections = Dict[int, Dict[int, Tuple[int, int]]]
@@ -281,3 +282,26 @@ def format_grid_map(grid: Grid, counts: Dict[Tuple[int, int], int]) -> List[str]
         links = (mark(grid[(0, c)], grid[(rows - 1, c)]) for c in range(cols))
         lines.append(" " * left + "".join(f"{'~' + n:<{cell + gap}}" for n in links).rstrip())
     return lines
+
+
+def check_grid_links(grid: Grid, counts: Dict[Tuple[int, int], int]) -> List[str]:
+    """Grid links that are missing or differ from the usual count, and links between non-neighbours.
+    Wraps are expected only on axes with at least one wrap link."""
+    mesh, wrap_x, wrap_y = grid_edges(grid)
+    links = {k: n for k, n in counts.items() if n and k[0] != k[1]}
+    wraps = {e for w in (wrap_x, wrap_y) if w & links.keys() for e in w}
+    expected = mesh | wraps
+    usual = Counter(links[e] for e in expected if e in links).most_common(1)
+    usual_n = usual[0][0] if usual else 0
+    pos = {chip: f"C{chip} (y{r},x{c})" for (r, c), chip in grid.items()}
+    issues = []
+    for a, b in sorted(expected):
+        n = links.get((a, b), 0)
+        if not n:
+            issues.append(f"{pos[a]} - {pos[b]}: {'wrap ' if (a, b) in wraps else ''}missing")
+        elif n != usual_n:
+            issues.append(f"{pos[a]} - {pos[b]}: {n} link{'s' if n != 1 else ''}")
+    for a, b in sorted(set(links) - mesh - wrap_x - wrap_y):
+        n = links[(a, b)]
+        issues.append(f"{pos[a]} - {pos[b]}: {n} link{'s' if n != 1 else ''}, not grid neighbours")
+    return [f"Link check (usual: {usual_n} links per grid link):"] + [f"  {i}" for i in issues or ["no issues"]]

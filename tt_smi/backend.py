@@ -688,7 +688,7 @@ class TTSMIBackend:
                 print(f"  {line}")
 
     def print_topology_grid(self):
-        """Print the inferred chip grid, whether each axis is a mesh or a torus, and a map of the grid"""
+        """Print the inferred chip grid, whether each axis is a mesh or a torus, a map and a link check"""
         topo = self.get_topology()
         if topo is None:
             print("Ethernet topology not supported with --use_luwen.")
@@ -700,6 +700,8 @@ class TTSMIBackend:
         print("\n".join(topology.format_axes(grid, topo["counts"])))
         print()
         print("\n".join(topology.format_grid_map(grid, topo["counts"])))
+        print()
+        print("\n".join(topology.check_grid_links(grid, topo["counts"])))
 
     def get_pci_affinity(self, board_num) -> Tuple[str, str]:
         """(local_cpulist, numa_node) from PCI sysfs. N/A for remote chips or unreadable sysfs."""
