@@ -235,18 +235,25 @@ def wrap_links(grid: Grid, counts: Dict[Tuple[int, int], int], axis: str) -> Lis
 
 def format_axes(grid: Grid, counts: Dict[Tuple[int, int], int]) -> List[str]:
     rows, cols = grid_shape(grid)
+    wraps = {axis: wrap_links(grid, counts, axis) for axis in ("X", "Y")}
     lines = [
-        f"Grid: {rows} rows (Y) x {cols} columns (X), inferred from Ethernet links; orientation is arbitrary",
-        "RING / LINE: the dim_types to use in a tt-metal mesh graph descriptor",
+        f"Grid: {rows} row{'s' if rows != 1 else ''} (Y) x {cols} column{'s' if cols != 1 else ''} (X), "
+        "inferred from Ethernet links; orientation is arbitrary"
     ]
-    for axis, size, line_name in (("X", cols, "rows"), ("Y", rows, "columns")):
-        wraps = wrap_links(grid, counts, axis)
-        if not wraps:
-            lines.append(f"{axis}: {size} chip{'s' if size != 1 else ''}, too short to tell mesh from torus")
-            continue
-        n = sum(1 for w in wraps if w)
-        kind = "torus / RING" if n == len(wraps) else "mesh / LINE" if n == 0 else "partial torus"
-        lines.append(f"{axis}: {kind}, wrap links on {n} of {len(wraps)} {line_name}")
+    if any(wraps.values()):
+        lines.append("RING / LINE: the dim_types to use in a tt-metal mesh graph descriptor")
+    for axis, size, line_name in (("X", cols, "row"), ("Y", rows, "column")):
+        n = sum(1 for w in wraps[axis] if w)
+        total = len(wraps[axis])
+        if not total:
+            same = "mesh and torus are the same" if size == 2 else "no links on this axis"
+            lines.append(f"{axis}: {size} chip{'s' if size != 1 else ''} per {line_name}: {same}")
+        elif n == 0:
+            lines.append(f"{axis}: mesh / LINE: no wrap links (0 of {total} {line_name}s)")
+        elif n == total:
+            lines.append(f"{axis}: torus / RING: wrap links on {n} of {total} {line_name}s")
+        else:
+            lines.append(f"{axis}: partial torus: wrap links on {n} of {total} {line_name}s")
     return lines
 
 
@@ -263,7 +270,8 @@ def format_grid_map(grid: Grid, counts: Dict[Tuple[int, int], int]) -> List[str]
     gap = max([len(mark(grid[(r, c)], grid[(r, c + 1)])) + 3 for r in range(rows) for c in range(cols - 1)] + [3])
     left = len(f"y{rows - 1}") + 2
     lines = [
-        "Map: n = links between neighbours, x = none, ~n = wrap links between the ends of the row / column",
+        "Map: n = links between neighbours, x = none"
+        + (", ~n = wrap links between the ends of the row / column" if wrap_x or wrap_y else ""),
         " " * left + "".join(f"x{c:<{cell + gap - 1}}" for c in range(cols)).rstrip(),
     ]
     for r in range(rows):
