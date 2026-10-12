@@ -538,7 +538,8 @@ def grid_counts(rows, cols, wrap_x=False, wrap_y=False, n=2):
 
 def grid_report(counts, n_chips):
     grid = topology.infer_grid(list(range(n_chips)), counts)
-    return topology.format_axes(grid, counts)[2:], topology.format_grid_map(grid, counts), topology.check_grid_links(
+    axes = [line for line in topology.format_axes(grid, counts) if line[:2] in ("X:", "Y:")]
+    return axes, topology.format_grid_map(grid, counts), topology.check_grid_links(
         grid, counts
     )
 
@@ -546,26 +547,26 @@ def grid_report(counts, n_chips):
 class TestInferGrid:
     def test_mesh(self):
         axes, _, _ = grid_report(grid_counts(8, 4), 32)
-        assert axes == ["X: mesh / LINE, wrap links on 0 of 8 rows", "Y: mesh / LINE, wrap links on 0 of 4 columns"]
+        assert axes == ["X: mesh / LINE: no wrap links (0 of 8 rows)", "Y: mesh / LINE: no wrap links (0 of 4 columns)"]
 
     def test_torus(self):
         axes, _, _ = grid_report(grid_counts(8, 4, wrap_x=True, wrap_y=True), 32)
-        assert axes == ["X: torus / RING, wrap links on 8 of 8 rows", "Y: torus / RING, wrap links on 4 of 4 columns"]
+        assert axes == ["X: torus / RING: wrap links on 8 of 8 rows", "Y: torus / RING: wrap links on 4 of 4 columns"]
 
     def test_torus_on_x_only(self):
         axes, _, _ = grid_report(grid_counts(8, 4, wrap_x=True), 32)
-        assert axes == ["X: torus / RING, wrap links on 8 of 8 rows", "Y: mesh / LINE, wrap links on 0 of 4 columns"]
+        assert axes == ["X: torus / RING: wrap links on 8 of 8 rows", "Y: mesh / LINE: no wrap links (0 of 4 columns)"]
 
     def test_partial_torus(self):
         counts = grid_counts(8, 4, wrap_x=True)
         del counts[(0, 3)]
         axes, _, check = grid_report(counts, 32)
-        assert axes[0] == "X: partial torus, wrap links on 7 of 8 rows"
+        assert axes[0] == "X: partial torus: wrap links on 7 of 8 rows"
         assert len([line for line in check if "missing" in line]) == 1
 
     def test_axis_too_short(self):
         axes, _, _ = grid_report(grid_counts(2, 2), 4)
-        assert axes == ["X: 2 chips, too short to tell mesh from torus", "Y: 2 chips, too short to tell mesh from torus"]
+        assert axes == ["X: 2 chips per row: mesh and torus are the same", "Y: 2 chips per column: mesh and torus are the same"]
 
     def test_no_links_no_grid(self):
         assert topology.infer_grid([0, 1, 2], {}) is None
@@ -582,7 +583,7 @@ class TestGridMap:
         assert grid_map[0].startswith("Map:")
         assert grid_map[1].split() == ["x0", "x1"]
         assert len(grid_map) == 2 + 3 + 2
-        assert "~" not in "\n".join(grid_map[1:])
+        assert "~" not in "\n".join(grid_map)
 
     def test_torus_marks_wraps(self):
         _, grid_map, _ = grid_report(grid_counts(4, 4, wrap_x=True, wrap_y=True), 16)
